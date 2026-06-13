@@ -1,0 +1,241 @@
+module uart_rx_tb;
+
+    // -------------------------------------------------------
+    // Parameters - must match DUT exactly
+    // -------------------------------------------------------
+    localparam CLK_BIT    = 104;
+    localparam CLK_PERIOD = 10;            // 10ns = 100MHz
+    localparam FRAME_CLKS = CLK_BIT * 10; // 10 bits per frame = 1040 clocks
+
+    // -------------------------------------------------------
+    // DUT signals
+    // -------------------------------------------------------
+    reg        clk;
+    reg        rst;
+    reg        rx;
+    wire [7:0] d_out;
+    wire       done;
+
+    // -------------------------------------------------------
+    // Pass / Fail counters
+    // -------------------------------------------------------
+    integer pass_cnt;
+    integer fail_cnt;
+
+    // -------------------------------------------------------
+    // DUT instantiation
+    // -------------------------------------------------------
+    uart_rx #(.clk_bit(CLK_BIT)) dut (
+        .clk   (clk),
+        .rst   (rst),
+        .rx    (rx),
+        .d_out (d_out),
+        .done  (done)
+    );
+
+    // -------------------------------------------------------
+    // Clock generation - 100 MHz
+    // -------------------------------------------------------
+    initial clk = 0;
+    always #(CLK_PERIOD/2) clk = ~clk;
+
+    // -------------------------------------------------------
+    // NOTE on your DATA state:
+    //   Your code samples rx at END of bit period (clk_bit-1)
+    //   NOT at mid-point. So send_byte drives rx and holds it
+    //   stable for the full bit period - this is correct for
+    //   your implementation.
+    // -------------------------------------------------------
+
+    // -------------------------------------------------------
+    // Task: send one UART byte (8N1, LSB first)
+    //       drives rx on falling edge for clean setup time
+    // -------------------------------------------------------
+    task send_byte;
+        input [7:0] data;
+        integer i;
+        begin
+            // START bit - pull low
+            @(negedge clk); rx = 0;
+            repeat(CLK_BIT) @(posedge clk);
+
+            // 8 DATA bits - LSB first
+            for (i = 0; i < 8; i = i + 1) begin
+                @(negedge clk); rx = data[i];
+                repeat(CLK_BIT) @(posedge clk);
+            end
+
+            // STOP bit - pull high
+            @(negedge clk); rx = 1;
+            repeat(CLK_BIT) @(posedge clk);
+        end
+    endtask
+
+    // -------------------------------------------------------
+    // Task: send byte then verify done and d_out
+    // -------------------------------------------------------
+    task send_and_check;
+        input [7:0] data;
+        input [31:0] tnum;
+        integer timeout;
+        begin
+            $display("\n-- Test %0d : sending 0x%02X --", tnum, data);
+
+            send_byte(data);
+
+            // Wait for done pulse (timeout = 3 full frames)
+            timeout = 0;
+            while (!done && timeout < FRAME_CLKS * 3) begin
+                @(posedge clk);
+                timeout = timeout + 1;
+            end
+
+            // Report result
+            if (!done) begin
+                $display("  TIMEOUT  - done never went HIGH");
+                fail_cnt = fail_cnt + 1;
+            end else if (d_out === data) begin
+                $display("  PASS     - d_out = 0x%02X  (%0d)", d_out, d_out);
+                pass_cnt = pass_cnt + 1;
+            end else begin
+                $display("  FAIL     - expected 0x%02X  got 0x%02X", data, d_out);
+                fail_cnt = fail_cnt + 1;
+            end
+
+            // Idle gap before next test
+            repeat(CLK_BIT * 3) @(posedge clk);
+        end
+    endtask
+
+    // -------------------------------------------------------
+    // Main stimulus
+    // -------------------------------------------------------
+    initial begin
+        // Initialise all signals
+        pass_cnt = 0;
+        fail_cnt = 0;
+        rx       = 1;   // UART idle = HIGH
+        rst      = 1;
+        repeat(20) @(posedge clk);
+        rst = 0;
+        repeat(20) @(posedge clk);
+
+        $display("============================================");
+        $display("  UART RX Testbench (original DUT)");
+        $display("  CLK_BIT    = %0d",       CLK_BIT);
+        $display("  CLK        = %0d MHz",   1000/CLK_PERIOD);
+        $display("  Bit period = %0d ns",    CLK_BIT*CLK_PERIOD);
+        $display("  Frame time = %0d ns",    FRAME_CLKS*CLK_PERIOD);
+        $display("============================================");
+
+        // ----------------------------------------
+        // Test 1: 0x55 = 0101_0101 alternating
+        // ----------------------------------------
+        send_and_check(8'h55, 1);
+
+        // ----------------------------------------
+        // Test 2: 0xAA = 1010_1010 alternating
+        // ----------------------------------------
+        send_and_check(8'hAA, 2);
+
+        // ----------------------------------------
+        // Test 3: 0x00 all zeros
+        // ----------------------------------------
+        send_and_check(8'h00, 3);
+
+        // ----------------------------------------
+        // Test 4: 0xFF all ones
+        // ----------------------------------------
+        send_and_check(8'hFF, 4);
+
+        // ----------------------------------------
+        // Test 5: 0x41 ASCII 'A'
+        // ----------------------------------------
+        send_and_check(8'h41, 5);
+
+        // ----------------------------------------
+        // Test 6: 0x0F lower nibble
+        // ----------------------------------------
+        send_and_check(8'h0F, 6);
+
+        // ----------------------------------------
+        // Test 7: 0xF0 upper nibble
+        // ----------------------------------------
+        send_and_check(8'hF0, 7);
+
+        // ----------------------------------------
+        // Test 8: back-to-back bytes (no gap)
+        // ----------------------------------------
+        $display("\n-- Test 8 : back-to-back 0xA5 then 0x5A --");
+        begin : bb1
+            integer to;
+            send_byte(8'hA5);
+            to = 0;
+            while (!done && to < FRAME_CLKS*3) begin
+                @(posedge clk); to = to+1;
+            end
+            if (done && d_out===8'hA5) begin
+                $display("  PASS (1/2) d_out=0x%02X", d_out);
+                pass_cnt = pass_cnt+1;
+            end else begin
+                $display("  FAIL (1/2) expected 0xA5 got 0x%02X", d_out);
+                fail_cnt = fail_cnt+1;
+            end
+        end
+        begin : bb2
+            integer to;
+            send_byte(8'h5A);
+            to = 0;
+            while (!done && to < FRAME_CLKS*3) begin
+                @(posedge clk); to = to+1;
+            end
+            if (done && d_out===8'h5A) begin
+                $display("  PASS (2/2) d_out=0x%02X", d_out);
+                pass_cnt = pass_cnt+1;
+            end else begin
+                $display("  FAIL (2/2) expected 0x5A got 0x%02X", d_out);
+                fail_cnt = fail_cnt+1;
+            end
+        end
+        repeat(CLK_BIT*3) @(posedge clk);
+        $display("\n-- Test 9 : false start glitch --");
+        @(negedge clk); rx = 0;
+        repeat(CLK_BIT/4) @(posedge clk);   // only 1/4 bit low
+        @(negedge clk); rx = 1;              // back to idle
+        repeat(CLK_BIT*4) @(posedge clk);   // let DUT recover
+        $display("   glitch done, sending valid 0xB3...");
+        send_and_check(8'hB3, 9);
+
+        $display("\n-- Test 10 : reset mid-frame --");
+        @(negedge clk); rx = 0;             // start bit
+        repeat(CLK_BIT*4) @(posedge clk);   // 4 bits in
+        rst = 1;
+        repeat(10) @(posedge clk);
+        rst = 0;
+        @(negedge clk); rx = 1;             // return to idle
+        repeat(CLK_BIT*3) @(posedge clk);
+        send_and_check(8'hDE, 10);
+
+        $display("\n============================================");
+        $display("  RESULT:  %0d PASSED   %0d FAILED",
+                  pass_cnt, fail_cnt);
+        if (fail_cnt == 0)
+            $display("  *** ALL TESTS PASSED ***");
+        else
+            $display("  *** SOME TESTS FAILED - check waveform ***");
+        $display("============================================\n");
+
+        $finish;
+    end
+
+    initial begin
+        $dumpfile("uart_rx_tb.vcd");
+        $dumpvars(0, uart_rx_tb);
+    end
+
+    always @(posedge clk)
+        if (done)
+            $display("  [monitor] done=1  d_out=0x%02X  @ %0t ns",
+                     d_out, $time);
+
+endmodule
