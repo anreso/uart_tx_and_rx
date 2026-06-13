@@ -1,0 +1,64 @@
+module uart_tx(
+    input clk,
+    input rst,
+    output reg out_tx,
+    input start,
+    input [7:0] data,
+    output reg done
+    );
+    
+    // used for traversing and seeing,current state and store the orginal data
+    reg [7:0] temp_data;
+    reg [3:0] state;
+    reg [3:0] bit_index;
+    
+    parameter IDLE=0;
+    parameter START=1;
+    parameter DATA=2;
+    parameter STOP=3;
+    
+    always@(posedge clk or posedge rst)begin
+    if(rst)
+        begin
+            bit_index<=0;
+            state<=IDLE;
+            out_tx<=1;
+            done<=0;
+        end
+    else
+    begin
+        case(state)
+                IDLE:begin
+                done<=0;
+                if(start)
+                    begin
+                        temp_data<=data;
+                        state<=START;
+                    end
+                end
+                
+                START:
+                begin
+                    out_tx<=0;
+                    bit_index<=0;
+                    state<=DATA;
+                end
+                
+                DATA:
+                begin
+                out_tx<=temp_data[bit_index];
+                bit_index<=bit_index+1;
+                if(bit_index==7)
+                state<=STOP;
+                end
+                
+                STOP:
+                begin
+                    out_tx<=1;
+                    done<=1;
+                    state<=IDLE;
+                end
+            endcase
+    end
+    end
+endmodule
