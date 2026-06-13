@@ -1,0 +1,43 @@
+module uart_tx_tb();
+reg clk,rst,start;
+reg [7:0]data;
+wire out_tx,done;
+
+uart_tx uut(.clk(clk),.rst(rst),.start(start),.out_tx(out_tx),.done(done),.data(data));
+
+initial begin
+clk=0;
+forever #5 clk=~clk;
+end
+
+initial  begin
+rst = 1;
+        start = 0;
+        data = 8'b10110011;
+
+        // Apply reset
+        #10;
+        rst = 0;
+
+        // First transmission
+        #10;
+        start = 1;
+        #10;
+        start = 0;
+
+        // Wait for transmission to complete
+        #150;
+
+        // Second transmission (different data)
+        data = 8'b11001100;
+        #10;
+        start = 1;
+        #10;
+        start = 0;
+
+        #150;
+
+        // Finish simulation
+        $finish;
+end
+endmodule
