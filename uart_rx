@@ -1,0 +1,107 @@
+module uart_rx#(parameter clk_bit=104)(
+    input clk,
+    input rst,
+    input rx,
+    output reg [7:0] d_out,
+    output reg done
+    );
+    reg [3:0]state;
+    reg [15:0]clk_count;
+    reg [2:0]bit_index;
+    reg [7:0]rx_shift;
+    
+    localparam IDLE=0;
+    localparam START=1;
+    localparam DATA=2;
+    localparam STOP=3;
+    localparam DONE=4;
+    
+    always @(posedge clk or posedge rst)
+    begin
+    if(rst)
+        begin
+        clk_count<=0;
+        bit_index<=0;
+        rx_shift<=0;
+        done<=0;
+        state<=IDLE;
+        end
+     else
+        begin
+            case(state)
+                    IDLE:begin
+                    done<=0;
+                    if(rx==0)
+                    begin
+                        state<=START;
+                        clk_count<=0;
+                    end
+                    end
+                    START:
+                    begin
+                    if(clk_count==(clk_bit/2))
+                    begin
+                    if(rx==0)
+                        begin
+                            clk_count<=0;
+                            bit_index<=0;
+                            state<=DATA;
+                        end
+                    else
+                        begin
+                            state<=IDLE;
+                        end
+                    end
+                    else
+                        begin
+                            clk_count<=clk_count+1;
+                        end
+                    end
+                    DATA:
+                    begin
+                    if(clk_count<clk_bit-1)
+                    begin
+                        clk_count<=clk_count+1;
+                    end
+                    else
+                    begin
+                        rx_shift[bit_index]<=rx;
+                        clk_count<=0;
+                        if(bit_index<7)
+                        begin
+                             bit_index<=bit_index+1;
+                        end
+                        else
+                        begin
+                            bit_index<=0;
+                            state<=STOP;
+                        end
+                    end
+                    end
+                    STOP:
+                    begin
+                        if(clk_count<clk_bit-1)
+                        begin
+                            clk_count<=clk_count+1;
+                        end
+                        else
+                        begin
+                            if(rx==1)
+                            begin
+                            d_out<=rx_shift;
+                            done<=1;
+                            end
+                            state<=DONE;
+                            clk_count<=0;
+                        end
+                    end
+                    DONE:
+                    begin
+                    
+                        done<=0;
+                        state<=IDLE;
+                    end  
+            endcase
+        end
+    end
+endmodule
